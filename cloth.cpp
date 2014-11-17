@@ -4,6 +4,7 @@
 
 #include "Angel.h"
 #include <vector>
+#include <fstream>
 
 #define TWODIM(x,y) ( (x) + (y) * meshSize )
 
@@ -17,11 +18,12 @@ const float spf( 1.0 / fps );
 const float mspf( 1000.0 * spf );
 
 // options
-const int meshSize( 100 );
 const float meshSeparation( 0.1 );
+int meshSize( 40 );
 vec3 grav( 0.0, 0.0, -2.0 );
 int numConstraintReps( 10 );
-bool wireFrame( true );
+bool wireFrame( false );
+bool resetHorizontal( true );
 
 // object data
 std::vector<vec3> vert;
@@ -29,6 +31,7 @@ std::vector<vec3> prevVert;
 std::vector<vec2> texcoord;
 std::vector<vec3> normal;
 std::vector<GLushort> indices;
+GLuint clothTexture;
 
 // view
 vec3 lookAt( meshSize * meshSeparation * 0.5, meshSize * meshSeparation * 0.5, 0.0 );
@@ -51,6 +54,7 @@ GLuint mvMatrixLoc;
 GLuint vertLoc;
 GLuint texCoordLoc;
 GLuint normalLoc;
+GLuint textureLoc;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -59,11 +63,9 @@ void init()
     srand( time( NULL ) );
     glClearColor( 1.0, 1.0, 1.0, 1.0 );
     glEnable( GL_DEPTH_TEST );
-    //glEnable( GL_TEXTURE_2D );
+    glEnable( GL_TEXTURE_2D );
     glPixelStorei( GL_PACK_ALIGNMENT, 1 );
     glPixelStorei( GL_UNPACK_ALIGNMENT, 1 );
-    
-    glPolygonMode( GL_FRONT_AND_BACK, GL_LINE );
 }
 
 void setView()
@@ -76,12 +78,46 @@ void setView()
     mvMatrix = LookAt( camera, lookAt, up );
 }
 
+void createMeshNormals()
+{
+    normal.clear();
+    
+    for( int y = 0; y < meshSize; ++y )
+    {
+        for( int x = 0; x < meshSize; ++x )
+        {
+            vec3 self = vert[ TWODIM( x, y ) ];
+            vec3 west(self), east(self), south(self), north(self);
+            if( x > 0 )
+            {
+                west = vert[ TWODIM( x - 1, y ) ];
+            }
+            if( x < meshSize - 1 )
+            {
+                east = vert[ TWODIM( x + 1, y ) ];
+            }
+            if( y > 0 )
+            {
+                south = vert[ TWODIM( x, y - 1 ) ];
+            }
+            if( y < meshSize - 1 )
+            {
+                north = vert[ TWODIM( x, y + 1 ) ];
+            }
+            
+            vec3 xDiff( east.x - west.x, east.y - west.y, east.z - west.z );
+            vec3 yDiff( north.x - south.x, north.y - south.y, north.z - south.z );
+            
+            normal.push_back( normalize( cross( xDiff, yDiff ) ) );
+        }
+    }
+}
+
 void rebuildMesh()
 {
     // reset
     vert.clear();
     texcoord.clear();
-    normal.clear();
     indices.clear();
     
     // create mesh of squares
@@ -89,7 +125,12 @@ void rebuildMesh()
     {
         for( int i = 0; i < meshSize; ++i )
         {
-            vert.push_back( vec3( 0.1*i, 0.1*j, meshSize * meshSeparation * 0.5 ) );
+            vert.push_back( vec3( resetHorizontal * meshSeparation * i,
+                                  meshSeparation * j,
+                                  meshSize * meshSeparation * 0.5 - (!resetHorizontal) * meshSeparation * i ) );
+            
+            texcoord.push_back( vec2( i / (float)meshSize, j / (float)meshSize ) );
+
             if( i && j )
             {
                 indices.push_back( TWODIM( i - 1, j - 1 ) );
@@ -104,12 +145,13 @@ void rebuildMesh()
     }
     
     prevVert = vert;
+    createMeshNormals();
 }
 
 void sendData()
 {
     // vertices
-    glBufferData( GL_ARRAY_BUFFER, ( vert.size() + normal.size() ) * sizeof( vec3 ) /*+ texcoord.size() * sizeof( vec2 )*/, NULL, GL_STATIC_DRAW );
+    glBufferData( GL_ARRAY_BUFFER, ( vert.size() + normal.size() ) * sizeof( vec3 ) + texcoord.size() * sizeof( vec2 ), NULL, GL_STATIC_DRAW );
     glBufferSubData( GL_ARRAY_BUFFER, 0, vert.size() * sizeof( vec3 ), vert[0] );
     glEnableVertexAttribArray( vertLoc );
     glVertexAttribPointer( vertLoc, 3, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET( 0 ) );
@@ -118,14 +160,14 @@ void sendData()
     glBufferData( GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof( GLushort ), &indices[0], GL_STATIC_DRAW );
     
     // texture coordinates
-    /*glBufferSubData( GL_ARRAY_BUFFER, vert.size() * sizeof( vec3 ), texcoord.size() * sizeof( vec2 ), texcoord[0] );
-     glEnableVertexAttribArray( texCoordLoc );
-     glVertexAttribPointer( texCoordLoc, 2, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET( vert.size() * sizeof( vec3 ) ) );*/
+    glBufferSubData( GL_ARRAY_BUFFER, vert.size() * sizeof( vec3 ), texcoord.size() * sizeof( vec2 ), texcoord[0] );
+    glEnableVertexAttribArray( texCoordLoc );
+    glVertexAttribPointer( texCoordLoc, 2, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET( vert.size() * sizeof( vec3 ) ) );
      
-     // normals
-     glBufferSubData( GL_ARRAY_BUFFER, vert.size() * sizeof( vec3 ) + texcoord.size() * sizeof( vec2 ), normal.size() * sizeof( vec3 ), normal[0] );
-     glEnableVertexAttribArray( normalLoc );
-     glVertexAttribPointer( normalLoc, 3, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET( vert.size() * sizeof( vec3 ) + texcoord.size() * sizeof( vec2 ) ) );
+    // normals
+    glBufferSubData( GL_ARRAY_BUFFER, vert.size() * sizeof( vec3 ) + texcoord.size() * sizeof( vec2 ), normal.size() * sizeof( vec3 ), normal[0] );
+    glEnableVertexAttribArray( normalLoc );
+    glVertexAttribPointer( normalLoc, 3, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET( vert.size() * sizeof( vec3 ) + texcoord.size() * sizeof( vec2 ) ) );
 }
 
 void setupData()
@@ -150,8 +192,10 @@ void setupData()
     glGenBuffers( 1, &indexBuffer );
     glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, indexBuffer );
 
-    // texture coordinates
-    //texCoordLoc = glGetAttribLocation( sProgram, "a_vTexCoord" );
+    // texture and coordinates
+    textureLoc = glGetUniformLocation( sProgram, "u_sTexture" );
+    glUniform1i( textureLoc, 0 );
+    texCoordLoc = glGetAttribLocation( sProgram, "a_vTexCoord" );
     
     // normals
     normalLoc = glGetAttribLocation( sProgram, "a_vNormal" );
@@ -186,6 +230,14 @@ void mouse( int button, int state, int x, int y )
     {
         mouseX = x;
         mouseY = y;
+    }
+    
+    else if( button == GLUT_RIGHT_BUTTON && state == GLUT_DOWN )
+    {
+        int meshY = x * meshSize / windowW;
+        int meshX = y * meshSize / windowH;
+        
+        prevVert[ TWODIM( meshX, meshY ) ].x += 20.0 * meshSeparation;
     }
 }
 
@@ -275,7 +327,23 @@ void keyboard( unsigned char key, int x, int y )
         case '_':
             grav *= 0.5;
             break;
+
+        case ']':
+        case '}':
+            meshSize *= 2.0;
+            rebuildMesh();
+            break;
+        case '[':
+        case '{':
+            meshSize *= 0.5;
+            rebuildMesh();
+            break;
             
+        case '\'':
+            resetHorizontal = !resetHorizontal;
+            rebuildMesh();
+            break;
+
         case 'r':
         case 'R':
             rebuildMesh();
@@ -355,6 +423,9 @@ void timeStep( int s )
         }
     }
     
+    // calculate new normals
+    createMeshNormals();
+    
     // save previous state
     prevVert = tmpVert;
     
@@ -364,6 +435,86 @@ void timeStep( int s )
     glutPostRedisplay();
     glutTimerFunc( mspf, timeStep, s );
 }
+
+bool createTextureFromBMP( const char* path, GLuint& texture, GLuint texSlot = 0 )
+{
+    // open texture file
+    std::ifstream inFile( path );
+    if( !inFile )
+    {
+        std::cerr << "Cannot open " << path << ": " << strerror( errno ) << std::endl;
+        return false;
+    }
+    
+    // get size of image and discard header
+    int width, height;
+    inFile.ignore( 18 );
+    inFile.read( (char*)&width, 4 );
+    inFile.read( (char*)&height, 4 );
+    inFile.ignore( 25 );
+    
+    // flip data if necessary
+    int yStart = 0;
+    int yInc = 1;
+    if( height < 0 )
+    {
+        height *= -1;
+        yStart = height - 1;
+        yInc = -1;
+    }
+    
+    // read data (BMP stores pixels in BGR format)
+    GLubyte* image = new GLubyte[ width * height * 3 ];
+    GLubyte* ptr = image + 2;
+    for( int j = yStart; j > -1 && j < height; j += yInc )
+    {
+        int i;
+        for( i = 0; i < width; ++i )
+        {
+            for( int k = 0; k < 3; ++k )
+            {
+                inFile.read( (char*)ptr, 1 );
+                --ptr;
+            }
+            ptr += 6;
+        }
+
+        // remove padding bytes
+        if( i % 4 )
+        {
+            inFile.ignore( 4 - ( i % 4 ) );
+        }
+    }
+    
+    // create texture
+    glGenTextures( 1, &texture );
+    glBindTexture( GL_TEXTURE_2D, texture );
+    glActiveTexture( GL_TEXTURE0 + texSlot );
+    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT );
+    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT );
+    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+    glTexImage2D( GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, image );
+    
+    return true;
+}
+
+void createDefaultTexture( GLuint& texture, GLuint texSlot = 0 )
+{
+    GLubyte image[] = { 255, 255, 255 };
+    
+    glGenTextures( 1, &texture );
+    glBindTexture( GL_TEXTURE_2D, texture );
+    glActiveTexture( GL_TEXTURE0 );
+    
+    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP );
+    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP );
+    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+    
+    glTexImage2D( GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, image );
+}
+
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -378,6 +529,21 @@ int main( int argc, char** argv )
     // change default settings
     init();
 
+    // get texture if specified
+    if( argc > 1 )
+    {
+        createTextureFromBMP( argv[1], clothTexture );
+    }
+    else
+    {
+        std::cout << "To add a bitmap texture, specify it on the command line:" << std::endl << argv[0] << " <BMP texture>" << std::endl;
+    }
+
+    if( !clothTexture )
+    {
+        createDefaultTexture( clothTexture );
+    }
+    
     // create view
     setupData();
     
